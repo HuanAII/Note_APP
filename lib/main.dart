@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:noteapp/auth/LoginPage.dart';
+import 'package:firebase_core/firebase_core.dart';  // import Firebase core
+import 'package:noteapp/screens/LoginPage.dart';
+import 'package:noteapp/screens/RegisterPage.dart';
 import 'screens/home_page.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(); 
   runApp(const MyApp());
 }
 
@@ -19,6 +23,7 @@ class MyApp extends StatelessWidget {
       routes: {
         '/': (context) => const LoginPage(),
         '/home': (context) => const HomePage(),
+        '/register': (context) => RegisterPage(),
       },
     );
   }

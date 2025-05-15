@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -10,50 +11,58 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final CollectionReference notes =
-      FirebaseFirestore.instance.collection('notes');
+  final CollectionReference notes = FirebaseFirestore.instance.collection('notes');
 
   final TextEditingController titleController = TextEditingController();
   final TextEditingController contentController = TextEditingController();
 
-  @override
-  void initState() {
-    super.initState();
-    checkAuth();
+  Future<bool> addNoteViaApi(String title, String content) async {
+      final url = Uri.parse('http://192.168.1.3:3000/api/notes');
+
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'title': title, 'content': content}),
+    );
+
+    if (response.statusCode == 201||response.statusCode == 200) {
+      return true;
+    } else {
+      print('Failed to add note: ${response.body}');
+      return false;
+    }
   }
 
-  void checkAuth() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    if (token == null || token.isEmpty) {
-      Navigator.pushReplacementNamed(context, '/');
-    }
-  }
-  void showNoteDialog({DocumentSnapshot? doc}) {
-    if (doc != null) {
-      titleController.text = doc['title'];
-      contentController.text = doc['content'];
-    } else {
-      titleController.clear();
-      contentController.clear();
-    }
+  void _showAddNoteDialog() {
+    titleController.clear();
+    contentController.clear();
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(doc == null ? 'Add Note' : 'Edit Note'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: const InputDecoration(labelText: 'Title'),
-            ),
-            TextField(
-              controller: contentController,
-              decoration: const InputDecoration(labelText: 'Content'),
-            ),
-          ],
+      builder: (context) => AlertDialog(
+        title: const Text('Add Note'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: const InputDecoration(
+                  labelText: 'Title',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: contentController,
+                decoration: const InputDecoration(
+                  labelText: 'Content',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 4,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -62,70 +71,90 @@ class _HomePageState extends State<HomePage> {
           ),
           ElevatedButton(
             onPressed: () async {
-              final title = titleController.text;
-              final content = contentController.text;
+              final title = titleController.text.trim();
+              final content = contentController.text.trim();
 
-              if (doc == null) {
-                await notes.add({'title': title, 'content': content});
-              } else {
-                await notes.doc(doc.id).update({'title': title, 'content': content});
+              if (title.isEmpty || content.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please fill in all fields')),
+                );
+                return;
               }
 
-              Navigator.pop(context);
+              final success = await addNoteViaApi(title, content);
+              if (success) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Note added successfully')),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Failed to add note')),
+                );
+              }
             },
-            child: Text(doc == null ? 'Add' : 'Update'),
-          )
+            child: const Text('Add'),
+          ),
         ],
       ),
     );
   }
 
-  void deleteNote(String id) {
-    notes.doc(id).delete();
+  Future<void> _deleteNote(String id) async {
+    await notes.doc(id).delete();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Note deleted')),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Notes')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => showNoteDialog(),
-        child: const Icon(Icons.add),
+      appBar: AppBar(
+        title: const Text('My Notes'),
       ),
-      body: StreamBuilder(
-        stream: notes.snapshots(),
-        builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
-          if (snapshot.hasError) return const Text('Something went wrong');
+      body: StreamBuilder<QuerySnapshot>(
+        stream: notes.orderBy('createdAt', descending: true).snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(child: Text('Something went wrong'));
+          }
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final data = snapshot.data!.docs;
+          final docs = snapshot.data?.docs ?? [];
+
+          if (docs.isEmpty) {
+            return const Center(child: Text('No notes found'));
+          }
 
           return ListView.builder(
-            itemCount: data.length,
+            itemCount: docs.length,
             itemBuilder: (context, index) {
-              final doc = data[index];
-              return ListTile(
-                title: Text(doc['title']),
-                subtitle: Text(doc['content']),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit, color: Colors.orange),
-                      onPressed: () => showNoteDialog(doc: doc),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete, color: Colors.red),
-                      onPressed: () => deleteNote(doc.id),
-                    ),
-                  ],
+              final doc = docs[index];
+              final data = doc.data()! as Map<String, dynamic>;
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                child: ListTile(
+                  title: Text(
+                    data['title'] ?? '',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(data['content'] ?? ''),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.red),
+                    onPressed: () => _deleteNote(doc.id),
+                  ),
                 ),
               );
             },
           );
         },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddNoteDialog,
+        child: const Icon(Icons.add),
       ),
     );
   }
